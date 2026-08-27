@@ -1,0 +1,16 @@
+# Replaces the stock local attachment store rather than layering over it:
+# `ctx.attachments` is a single service slot, and `reflect.provide` throws when
+# a second fiber claims a registered name. The side cap therefore ships as a
+# subclass of `LocalAttachmentStore`, mounted in its place.
+#
+# Every `attachment-local` config field still applies here — the subclass
+# reuses that schema — so a deployment that customized the local store moves
+# those values onto this row.
+- id: attachment-local
+  disabled: true
+
+- insert:
+    - id: attachment-side-limited
+      name: '@dsh-external/dsh-image-side-limit'
+      config:
+        maxRequestImageSide: 2000

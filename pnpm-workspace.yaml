@@ -1,0 +1,3 @@
+# esbuild only builds the plugin; nothing at runtime depends on its postinstall.
+allowBuilds:
+  esbuild: false

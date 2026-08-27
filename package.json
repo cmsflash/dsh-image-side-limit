@@ -1,0 +1,61 @@
+{
+  "name": "@dsh-external/dsh-image-side-limit",
+  "version": "0.1.0",
+  "description": "Per-side dimension cap for DeepSeek Harness model-request images, so provider limits like Anthropic's 2000px many-image rule cannot brick a session",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-attachment": "*",
+    "@deepseek-ai/dsh-attachment-local": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "sharp": "^0.35.3",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/schemastery": "link:../../deepseek-harness/vendor/schemastery",
+    "@deepseek-ai/dsh-attachment": "link:../../deepseek-harness/packages/attachment/attachment",
+    "@deepseek-ai/dsh-attachment-local": "link:../../deepseek-harness/packages/attachment/attachment-local"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "attachment",
+    "image",
+    "anthropic"
+  ]
+}
