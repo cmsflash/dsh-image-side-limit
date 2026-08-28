@@ -16,9 +16,14 @@ messages.34.content.1.image.source.base64.data: At least one of the image
 dimensions exceed max allowed size for many-image requests: 2000 pixels
 ```
 
-DSH normalizes stored images to a **2048px** long edge, 48px above that limit.
 A request version is derived from `ImageRequestPolicy`, which offers only
 `maxPixels` (total) and `maxBytes` — neither can express "no side above N".
+
+Normalization does not save you, and on current `master` it is the more
+exposed of the two arrangements. A release that caps the stored long edge at
+2048px still sits 48px above the provider limit; `master` bounds storage by
+total pixels (`normalizedImageMaxPixels`, 2048²), so a 3248x750 paste is only
+2.4M pixels and is stored — and sent — at its full 3248px width.
 
 The failure is permanent rather than transient. A session log stores an
 attachment *reference*, and request bytes are re-derived from it on every turn,
@@ -68,12 +73,17 @@ pnpm add @dsh-external/dsh-image-side-limit
 dsh --profile web --patch node_modules/@dsh-external/dsh-image-side-limit/cordis.patch.yml
 ```
 
-> **Requires an unreleased DSH.** `readImageRequest` and `ImageRequestPolicy`
-> do not exist in the published `@deepseek-ai/dsh-attachment*` packages
-> (`0.0.1-rc.1`), whose peer range also names the retired
-> `@deepseek-ai/dsh-paths`. Until a newer release lands, the dev dependencies
-> here link a local `deepseek-harness` checkout at `../../deepseek-harness`;
-> point them elsewhere if yours lives somewhere else.
+Verified against `deepseek-ai/deepseek-harness` `origin/master`
+(`0.1.2-alpha.1`); the full suite runs green there.
+
+> **Build from a DSH checkout, not npm.** The peer packages this plugin
+> extends are current on `master` but stale on npm: the published
+> `@deepseek-ai/dsh-attachment*` (`0.0.1-rc.1`) predate `readImageRequest` and
+> `ImageRequestPolicy` entirely, and their peer range names the retired
+> `@deepseek-ai/dsh-paths`, so a registry install cannot resolve. The dev
+> dependencies here link `../../deepseek-harness`; point them at your own
+> checkout. Once a release carrying `readImageRequest` reaches npm, those
+> links become ordinary version ranges and nothing else changes.
 
 `ctx.attachments` is a single service slot and Cordis throws when a second
 fiber claims a registered name, so this cannot layer over the local store. It
@@ -120,6 +130,13 @@ Verified against the actual bytes that broke a real session:
 ```
 stock attachment-local   stored 2048x473 -> request 2048x473  REJECTED by Anthropic
 with side-limit plugin   stored 2048x473 -> request 1996x461  ACCEPTED
+```
+
+And against `origin/master`, re-pasting that banner at its original size:
+
+```
+stock attachment-local   stored 3248x750 -> request 3248x750  REJECTED by Anthropic
+with side-limit plugin   stored 3248x750 -> request 1996x461  ACCEPTED
 ```
 
 ## Scope

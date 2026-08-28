@@ -23,7 +23,11 @@ import { SideLimitedAttachmentStore } from '../src/index.ts'
 
 /** The banner's source dimensions before DSH normalized it to a 2048 long edge. */
 const ORIGINAL = { width: 3248, height: 750 }
-/** What normalization stored, and what every later request rebuilt. */
+/**
+ * What the failing session had on disk, and what every later request rebuilt.
+ * Used directly as a source here so the regression reproduces that exact
+ * attachment regardless of how a given DSH release normalizes a fresh paste.
+ */
 const STORED = { width: 2048, height: 473 }
 /** Anthropic's per-side cap for requests carrying more than twenty images. */
 const ANTHROPIC_MANY_IMAGE_MAX_SIDE = 2000
@@ -72,16 +76,22 @@ describe('GCSX regression: 2048x473 banner', () => {
   })
 
   it('admits the original 3248x750 paste and still serves a compliant request', async () => {
-    // The whole failure began at admission: DSH accepts a large paste and
-    // downscales it to a 2048 long edge, 48px above the provider limit.
+    // The failure began at admission, and how much normalization shrinks a
+    // paste is a storage decision that differs across DSH versions: a
+    // dimension-capped release stores 2048x473, while a purely pixel-budgeted
+    // one stores the full 3248x750 (only 2.4M pixels). Either way the stored
+    // long edge exceeds the provider limit, so this asserts the outcome the
+    // plugin owns — the request version — and merely records what was stored.
     const store = new SideLimitedAttachmentStore(new Context(), { dshHome: join(home, 'fixed') })
     const ref = await store.saveImage({
       data: await banner(ORIGINAL.width, ORIGINAL.height),
       mediaType: 'image/png',
       name: 'image.png',
     })
-    assert.equal(ref.width, STORED.width, 'normalization should still store a 2048 long edge')
-    assert.equal(ref.height, STORED.height)
+    assert.ok(
+      ref.width > ANTHROPIC_MANY_IMAGE_MAX_SIDE,
+      `precondition: expected storage to keep an oversized long edge, got ${ref.width}x${ref.height}`,
+    )
 
     const version = await store.readImageRequest(ref, ROUTE_POLICY)
     const decoded = await sharp(version.data).metadata()
