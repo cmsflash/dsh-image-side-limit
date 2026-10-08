@@ -16,8 +16,9 @@ messages.34.content.1.image.source.base64.data: At least one of the image
 dimensions exceed max allowed size for many-image requests: 2000 pixels
 ```
 
-A request version is derived from `ImageRequestPolicy`, which offers only
-`maxPixels` (total) and `maxBytes` — neither can express "no side above N".
+A request version is derived from an `ImageRequestTarget` that each route
+projects from its total-pixel budget (`requestImagePixelBudget`), and a pixel
+budget cannot express "no side above N".
 
 Normalization does not save you, and on current `master` it is the more
 exposed of the two arrangements. A release that caps the stored long edge at
@@ -42,25 +43,27 @@ depends on aspect ratio:
 
 | Source | Route default | Budget 923,828 | Side cap 2000 |
 |---|---|---|---|
-| 2048x473 banner | 2048x473 ✗ | 1999x462 ✓ | 1999x462 ✓ |
+| 2048x473 banner | 2048x473 ✗ | 1999x462 ✓ | 2000x462 ✓ |
 | 1446x837 screenshot | 1446x837 ✓ | 1263x731 (degraded) | 1446x837 ✓ |
 | 3000x300 strip | 3000x300 ✗ | 3000x300 ✗ | 2000x200 ✓ |
-| 400x3000 portrait | 400x3000 ✗ | 400x3000 ✗ | 266x1997 ✓ |
+| 400x3000 portrait | 400x3000 ✗ | 400x3000 ✗ | 267x2000 ✓ |
 
 Any budget low enough to fix the banner also degrades every ordinary
 screenshot, and no usable budget fixes the strip or the portrait at all.
 
 ## What this plugin does
 
-It rewrites the **policy**, never the image. For each image whose projection
-would exceed the cap, it computes the largest total-pixel budget whose
-projection lands within the cap, then delegates to the stock backend.
+It rewrites the **target**, never the image. When the route's target would
+produce a long edge above the cap, it replaces the target dimensions with the
+source projected to exactly the cap, then delegates to the stock backend. A
+route target already stricter than the cap is never enlarged, and `maxBytes` is
+never relaxed.
 
 Request bytes therefore remain a pure function of the stored attachment and the
-policy. The backend's variant id is a digest over `attachmentId`, `maxPixels`,
-`maxBytes`, and fixed encoder parameters, so the on-disk cache stays correct: a
-narrowed budget yields a new entry, and an unaffected image is delegated with
-the identical policy and keeps its existing one.
+target. The backend's variant id is a digest over `attachmentId`, the target
+width, height, and `maxBytes`, and fixed encoder parameters, so the on-disk
+cache stays correct: a narrowed target yields a new entry, and an unaffected
+image is delegated with the identical target and keeps its existing one.
 
 Storage is untouched. Only what goes on the wire is clamped, which is where the
 rejection happens — so mounting this fixes sessions whose oversized images are
@@ -73,17 +76,13 @@ pnpm add @dsh-external/dsh-image-side-limit
 dsh --profile web --patch node_modules/@dsh-external/dsh-image-side-limit/cordis.patch.yml
 ```
 
-Verified against `deepseek-ai/deepseek-harness` `origin/master`
-(`0.1.2-alpha.1`); the full suite runs green there.
+Requires a DSH whose attachment API takes an `ImageRequestTarget` (upstream
+since Sep 10, 2026; `0.1.6-alpha.2` and later). Earlier DSH releases passed an
+`ImageRequestPolicy` instead; this plugin no longer supports them.
 
-> **Build from a DSH checkout, not npm.** The peer packages this plugin
-> extends are current on `master` but stale on npm: the published
-> `@deepseek-ai/dsh-attachment*` (`0.0.1-rc.1`) predate `readImageRequest` and
-> `ImageRequestPolicy` entirely, and their peer range names the retired
-> `@deepseek-ai/dsh-paths`, so a registry install cannot resolve. The dev
-> dependencies here link `../../deepseek-harness`; point them at your own
-> checkout. Once a release carrying `readImageRequest` reaches npm, those
-> links become ordinary version ranges and nothing else changes.
+> **Build from a DSH checkout, not npm.** The dev dependencies link
+> `../../deepseek-harness`, so clone this repository beside your DSH checkout,
+> then `pnpm install && pnpm run build`. `lib/` is not committed.
 
 `ctx.attachments` is a single service slot and Cordis throws when a second
 fiber claims a registered name, so this cannot layer over the local store. It
@@ -117,8 +116,8 @@ Plus every field of `@deepseek-ai/dsh-attachment-local`.
 pnpm test
 ```
 
-26 tests. The unit tests cover the projection arithmetic, including a swept
-range of aspect ratios and degenerate one-pixel strips. The integration and
+21 tests. The unit tests cover the target clamp, including a swept range of
+aspect ratios in both orientations and degenerate one-pixel strips. The integration and
 regression suites run against the real `LocalAttachmentStore`, real `sharp`
 encoding, and a temporary `DSH_HOME`; they decode the produced bytes rather
 than trusting reported metadata, assert that the stock store still reproduces
@@ -129,21 +128,21 @@ Verified against the actual bytes that broke a real session:
 
 ```
 stock attachment-local   stored 2048x473 -> request 2048x473  REJECTED by Anthropic
-with side-limit plugin   stored 2048x473 -> request 1996x461  ACCEPTED
+with side-limit plugin   stored 2048x473 -> request 2000x462  ACCEPTED
 ```
 
-And against `origin/master`, re-pasting that banner at its original size:
+Re-pasting that banner at its original size:
 
 ```
 stock attachment-local   stored 3248x750 -> request 3248x750  REJECTED by Anthropic
-with side-limit plugin   stored 3248x750 -> request 1996x461  ACCEPTED
+with side-limit plugin   stored 3248x750 -> request 2000x462  ACCEPTED
 ```
 
 ## Scope
 
 This clamps request versions. It does not alter stored bytes, so it does not
 rewrite an existing session log — it makes those logs serviceable again. The
-underlying gap is that `ImageRequestPolicy` has no per-side field; adding one
+underlying gap is that a route's image budget has no per-side field; adding one
 upstream would make this plugin unnecessary.
 
 ## License

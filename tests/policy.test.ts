@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { budgetForSideCap, clampPolicyToSide, projectDimensions } from '../src/policy.ts'
+import { longEdgeDimensions } from '@deepseek-ai/dsh-attachment'
+import type { ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
+import { clampTargetToSide } from '../src/policy.ts'
+import { MAX_BYTES, routeTarget } from './route-target.ts'
 
-const ROUTE_BUDGET = 2048 * 2048
 const MAX_SIDE = 2000
-const policy = { maxPixels: ROUTE_BUDGET, maxBytes: 1024 * 1024 }
+
+/** The dimensions the store produces for a target: a long-edge resize, never enlarging. */
+function produced(width: number, height: number, target: ImageRequestTarget): { width: number, height: number } {
+  return longEdgeDimensions(width, height, width >= height ? target.width : target.height)
+}
 
 /** Dimensions observed in real DSH session logs on this machine, plus adversarial ratios. */
 const SOURCES: ReadonlyArray<readonly [number, number, string]> = [
   [2048, 473, 'GCSX banner that broke the session'],
+  [3248, 750, 'the same banner at its original paste size'],
   [2048, 1185, 'GLM rollouts screenshot'],
   [3840, 2160, '4K screenshot'],
   [3728, 2078, 'Chrome tab-group capture'],
@@ -21,119 +28,70 @@ const SOURCES: ReadonlyArray<readonly [number, number, string]> = [
   [12000, 5, 'pathological 2400:1 ratio'],
 ]
 
-describe('projectDimensions', () => {
-  it('returns the source unchanged when it already fits the budget', () => {
-    assert.deepEqual(projectDimensions(1446, 837, ROUTE_BUDGET), { width: 1446, height: 837 })
-  })
-
-  it('never exceeds the pixel budget it is given', () => {
-    for (const [width, height, label] of SOURCES) {
-      for (const budget of [ROUTE_BUDGET, 1_000_000, 923_828, 640_000, 10_000, 1]) {
-        const projected = projectDimensions(width, height, budget)
-        assert.ok(
-          projected.width * projected.height <= Math.max(budget, 1),
-          `${label} at budget ${budget}: ${projected.width}x${projected.height} exceeds budget`,
-        )
-        assert.ok(projected.width >= 1 && projected.height >= 1, `${label}: produced a zero dimension`)
-        assert.ok(Number.isInteger(projected.width) && Number.isInteger(projected.height), `${label}: non-integer`)
-      }
-    }
-  })
-
-  it('preserves orientation', () => {
-    const wide = projectDimensions(3000, 300, 100_000)
-    assert.ok(wide.width > wide.height)
-    const tall = projectDimensions(300, 3000, 100_000)
-    assert.ok(tall.height > tall.width)
-  })
-})
-
-describe('budgetForSideCap', () => {
-  it('produces a budget whose projection satisfies the cap', () => {
-    for (const [width, height, label] of SOURCES) {
-      const budget = budgetForSideCap(width, height, MAX_SIDE)
-      const projected = projectDimensions(width, height, budget)
-      assert.ok(
-        Math.max(projected.width, projected.height) <= MAX_SIDE,
-        `${label}: ${projected.width}x${projected.height} exceeds ${MAX_SIDE}`,
-      )
-      assert.ok(budget >= 1, `${label}: non-positive budget`)
-    }
-  })
-
-  it('leaves a source already within the cap at its own pixel count', () => {
-    assert.equal(budgetForSideCap(1446, 837, MAX_SIDE), 1446 * 837)
-  })
-
-  it('holds for a swept range of aspect ratios', () => {
-    for (let width = 2001; width <= 6000; width += 137) {
-      for (const height of [1, 7, 300, 1200, width]) {
-        const budget = budgetForSideCap(width, height, MAX_SIDE)
-        const projected = projectDimensions(width, height, budget)
-        assert.ok(
-          Math.max(projected.width, projected.height) <= MAX_SIDE,
-          `${width}x${height}: projected ${projected.width}x${projected.height}`,
-        )
-      }
-    }
-  })
-})
-
-describe('clampPolicyToSide', () => {
-  it('returns the identical policy object when no clamping is needed', () => {
-    const source = { width: 1446, height: 837 }
-    assert.equal(clampPolicyToSide(source, policy, MAX_SIDE), policy)
-  })
-
-  it('never relaxes the byte budget', () => {
-    const clamped = clampPolicyToSide({ width: 3840, height: 2160 }, policy, MAX_SIDE)
-    assert.equal(clamped.maxBytes, policy.maxBytes)
-  })
-
-  it('never raises maxPixels above the route budget', () => {
-    for (const [width, height] of SOURCES) {
-      const clamped = clampPolicyToSide({ width, height }, policy, MAX_SIDE)
-      assert.ok(clamped.maxPixels <= policy.maxPixels)
-    }
+describe('clampTargetToSide', () => {
+  it('returns the identical target object when the route target already fits', () => {
+    const target = routeTarget(1446, 837)
+    assert.equal(clampTargetToSide({ width: 1446, height: 837 }, target, MAX_SIDE), target)
   })
 
   it('brings every oversized real-world source within the cap', () => {
     for (const [width, height, label] of SOURCES) {
-      const clamped = clampPolicyToSide({ width, height }, policy, MAX_SIDE)
-      const projected = projectDimensions(width, height, clamped.maxPixels)
+      const clamped = clampTargetToSide({ width, height }, routeTarget(width, height), MAX_SIDE)
+      const result = produced(width, height, clamped)
       assert.ok(
-        Math.max(projected.width, projected.height) <= MAX_SIDE,
-        `${label}: ${projected.width}x${projected.height}`,
+        Math.max(result.width, result.height) <= MAX_SIDE,
+        `${label}: ${result.width}x${result.height} exceeds ${MAX_SIDE}`,
       )
+      assert.ok(result.width >= 1 && result.height >= 1, `${label}: produced a zero dimension`)
     }
   })
 
   it('fixes the ratios a total-pixel budget provably cannot express', () => {
-    // 3000x300 is only 900,000 pixels — far under a 2048^2 budget — yet 3000px
-    // wide. No pixel budget that keeps ordinary screenshots legible fixes it.
-    const strip = { width: 3000, height: 300 }
-    const unclamped = projectDimensions(strip.width, strip.height, ROUTE_BUDGET)
-    assert.equal(unclamped.width, 3000, 'precondition: the route budget leaves the strip untouched')
+    // 3000x300 is only 900,000 pixels — far under a 2048^2 budget — so the
+    // route's own target leaves the strip 3000px wide.
+    const target = routeTarget(3000, 300)
+    assert.equal(produced(3000, 300, target).width, 3000, 'precondition: the route target leaves the strip untouched')
+    const clamped = clampTargetToSide({ width: 3000, height: 300 }, target, MAX_SIDE)
+    assert.ok(produced(3000, 300, clamped).width <= MAX_SIDE)
+  })
 
-    const clamped = clampPolicyToSide(strip, policy, MAX_SIDE)
-    const projected = projectDimensions(strip.width, strip.height, clamped.maxPixels)
-    assert.ok(projected.width <= MAX_SIDE)
+  it('never relaxes the byte target', () => {
+    const clamped = clampTargetToSide({ width: 3840, height: 2160 }, routeTarget(3840, 2160), MAX_SIDE)
+    assert.equal(clamped.maxBytes, MAX_BYTES)
+  })
+
+  it('never enlarges a route target stricter than the cap', () => {
+    for (const [width, height, label] of SOURCES) {
+      const strict = routeTarget(width, height, 160_000)
+      const clamped = clampTargetToSide({ width, height }, strict, MAX_SIDE)
+      if (Math.max(produced(width, height, strict).width, produced(width, height, strict).height) <= MAX_SIDE) {
+        assert.equal(clamped, strict, `${label}: a fitting target was replaced`)
+      }
+      assert.ok(clamped.width <= strict.width && clamped.height <= strict.height, `${label}: target was enlarged`)
+    }
+  })
+
+  it('holds for a swept range of aspect ratios in both orientations', () => {
+    for (let side = 2001; side <= 6000; side += 137) {
+      for (const other of [1, 7, 300, 1200, side]) {
+        for (const [width, height] of [[side, other], [other, side]] as const) {
+          const clamped = clampTargetToSide({ width, height }, routeTarget(width, height), MAX_SIDE)
+          const result = produced(width, height, clamped)
+          assert.ok(Math.max(result.width, result.height) <= MAX_SIDE, `${width}x${height}: ${result.width}x${result.height}`)
+        }
+      }
+    }
   })
 
   it('is idempotent', () => {
     const source = { width: 3840, height: 2160 }
-    const once = clampPolicyToSide(source, policy, MAX_SIDE)
-    const twice = clampPolicyToSide(source, once, MAX_SIDE)
-    assert.deepEqual(twice, once)
+    const once = clampTargetToSide(source, routeTarget(3840, 2160), MAX_SIDE)
+    assert.deepEqual(clampTargetToSide(source, once, MAX_SIDE), once)
   })
 
-  it('keeps a distinct cache identity only when it changes the budget', () => {
-    // The backend derives its variant id from maxPixels + maxBytes, so an
-    // unchanged policy must stay byte-identical or cached versions are orphaned.
-    const untouched = clampPolicyToSide({ width: 1446, height: 837 }, policy, MAX_SIDE)
-    assert.deepEqual(untouched, policy)
-
-    const changed = clampPolicyToSide({ width: 2048, height: 473 }, policy, MAX_SIDE)
-    assert.notDeepEqual(changed, policy)
+  it('preserves aspect ratio within a pixel of the source', () => {
+    const clamped = clampTargetToSide({ width: 3000, height: 300 }, routeTarget(3000, 300), MAX_SIDE)
+    const result = produced(3000, 300, clamped)
+    assert.ok(Math.abs(10 - result.width / result.height) / 10 < 0.02, `ratio drifted: ${result.width}x${result.height}`)
   })
 })

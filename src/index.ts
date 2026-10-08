@@ -8,13 +8,13 @@
  * content addressing, digest verification, the request-version cache — and
  * overrides only the derivation of request bytes.
  *
- * The override rewrites the *policy*, never the image: it narrows `maxPixels`
- * for the one image that needs it and delegates. Request bytes stay a pure
- * function of the stored attachment and the policy, so the backend's variant
- * id (a digest over `attachmentId`, `maxPixels`, `maxBytes`, and fixed encoder
- * parameters) still identifies the result exactly and the on-disk cache stays
- * correct. Images already within the cap are delegated with the identical
- * policy and keep their existing cache entries.
+ * The override rewrites the *target*, never the image: it narrows the target
+ * dimensions for the one image that needs it and delegates. Request bytes stay
+ * a pure function of the stored attachment and the target, so the backend's
+ * variant id (a digest over `attachmentId`, the target width, height, and
+ * `maxBytes`, and fixed encoder parameters) still identifies the result exactly
+ * and the on-disk cache stays correct. Images already within the cap are
+ * delegated with the identical target and keep their existing cache entries.
  *
  * @module
  */
@@ -24,13 +24,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {
   ImageAttachmentRef,
-  ImageRequestPolicy,
+  ImageRequestTarget,
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import { clampPolicyToSide } from './policy.ts'
+import { clampTargetToSide } from './policy.ts'
 
-export { budgetForSideCap, clampPolicyToSide, projectDimensions } from './policy.ts'
-export type { RequestPolicy, SourceDimensions } from './policy.ts'
+export { clampTargetToSide } from './policy.ts'
+export type { SourceDimensions } from './policy.ts'
 
 /**
  * Anthropic's per-side limit for requests carrying more than twenty images.
@@ -79,16 +79,16 @@ export class SideLimitedAttachmentStore extends LocalAttachmentStore {
   /**
    * Derive one request version whose long edge is within the configured cap.
    * @param ref - durable normalized attachment reference.
-   * @param policy - route-owned pixel and encoded-byte budgets.
+   * @param target - route-owned target dimensions and encoded-byte target.
    * @param signal - optional cancellation forwarded to the delegate.
-   * @returns the delegate's request version, derived under a policy that also satisfies the side cap.
+   * @returns the delegate's request version, derived under a target that also satisfies the side cap.
    */
   override readImageRequest(
     ref: ImageAttachmentRef,
-    policy: ImageRequestPolicy,
+    target: ImageRequestTarget,
     signal?: AbortSignal,
   ): Promise<RequestImageAttachment> {
-    return super.readImageRequest(ref, clampPolicyToSide(ref, policy, this.maxRequestImageSide), signal)
+    return super.readImageRequest(ref, clampTargetToSide(ref, target, this.maxRequestImageSide), signal)
   }
 }
 

@@ -13,11 +13,14 @@ import { after, before, describe, it } from 'node:test'
 import sharp from 'sharp'
 import { Context } from '@deepseek-ai/cordis'
 import { LocalAttachmentStore } from '@deepseek-ai/dsh-attachment-local'
-import type { ImageAttachmentRef, ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SideLimitedAttachmentStore } from '../src/index.ts'
+import { MAX_BYTES, routeTarget } from './route-target.ts'
 
 const MAX_SIDE = 2000
-const ROUTE_POLICY: ImageRequestPolicy = { maxPixels: 2048 * 2048, maxBytes: 1024 * 1024 }
+
+/** The default route's target for one stored image. */
+const target = (ref: ImageAttachmentRef) => routeTarget(ref.width, ref.height)
 
 /** Noise beats a flat fill: a solid image compresses so far that byte caps never bind. */
 async function png(width: number, height: number): Promise<Uint8Array> {
@@ -64,7 +67,7 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
     // Establishes that the bug is real in this exact environment; without this
     // the next test could pass because nothing was ever oversized.
     const { plainRef } = await save(2048, 473)
-    const version = await plain.readImageRequest(plainRef, ROUTE_POLICY)
+    const version = await plain.readImageRequest(plainRef, target(plainRef))
     const decoded = await sharp(version.data).metadata()
     assert.equal(Math.max(decoded.width, decoded.height), 2048)
     assert.ok(Math.max(decoded.width, decoded.height) > MAX_SIDE)
@@ -80,7 +83,7 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
     ]
     for (const [width, height, label] of cases) {
       const { limitedRef } = await save(width, height)
-      const version = await limited.readImageRequest(limitedRef, ROUTE_POLICY)
+      const version = await limited.readImageRequest(limitedRef, target(limitedRef))
       const decoded = await sharp(version.data).metadata()
       assert.ok(
         Math.max(decoded.width, decoded.height) <= MAX_SIDE,
@@ -88,15 +91,15 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
       )
       assert.equal(decoded.width, version.width, `${label}: reported width disagrees with bytes`)
       assert.equal(decoded.height, version.height, `${label}: reported height disagrees with bytes`)
-      assert.ok(version.data.byteLength <= ROUTE_POLICY.maxBytes, `${label}: exceeded the byte budget`)
+      assert.ok(version.data.byteLength <= MAX_BYTES, `${label}: exceeded the byte budget`)
     }
   })
 
   it('leaves an image already within the cap byte-identical to the stock store', async () => {
     const { plainRef, limitedRef } = await save(1446, 837)
     const [stock, capped] = await Promise.all([
-      plain.readImageRequest(plainRef, ROUTE_POLICY),
-      limited.readImageRequest(limitedRef, ROUTE_POLICY),
+      plain.readImageRequest(plainRef, target(plainRef)),
+      limited.readImageRequest(limitedRef, target(limitedRef)),
     ])
     assert.equal(capped.variantId, stock.variantId, 'cache identity diverged for an unaffected image')
     assert.deepEqual(capped.data, stock.data, 'bytes diverged for an unaffected image')
@@ -106,7 +109,7 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
 
   it('preserves aspect ratio within a pixel of the source', async () => {
     const { limitedRef } = await save(3000, 300)
-    const version = await limited.readImageRequest(limitedRef, ROUTE_POLICY)
+    const version = await limited.readImageRequest(limitedRef, target(limitedRef))
     const sourceRatio = 3000 / 300
     const resultRatio = version.width / version.height
     assert.ok(Math.abs(sourceRatio - resultRatio) / sourceRatio < 0.02, `ratio drifted: ${resultRatio}`)
@@ -114,15 +117,15 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
 
   it('returns a stable variant id and reuses the cache across calls', async () => {
     const { limitedRef } = await save(2048, 473)
-    const first = await limited.readImageRequest(limitedRef, ROUTE_POLICY)
-    const second = await limited.readImageRequest(limitedRef, ROUTE_POLICY)
+    const first = await limited.readImageRequest(limitedRef, target(limitedRef))
+    const second = await limited.readImageRequest(limitedRef, target(limitedRef))
     assert.equal(first.variantId, second.variantId)
     assert.deepEqual(first.data, second.data)
   })
 
   it('declares metadata the provider contract requires', async () => {
     const { limitedRef } = await save(3840, 2160)
-    const version = await limited.readImageRequest(limitedRef, ROUTE_POLICY)
+    const version = await limited.readImageRequest(limitedRef, target(limitedRef))
     assert.equal(version.depth, 'uchar')
     assert.equal(version.space, 'srgb')
     assert.equal(version.bytes, version.data.byteLength)
@@ -131,9 +134,9 @@ describe('SideLimitedAttachmentStore against the real backend', () => {
 
   it('still honours a route budget stricter than the side cap', async () => {
     const { limitedRef } = await save(2048, 473)
-    const strict: ImageRequestPolicy = { maxPixels: 160_000, maxBytes: 1024 * 1024 }
+    const strict = routeTarget(limitedRef.width, limitedRef.height, 160_000)
     const version = await limited.readImageRequest(limitedRef, strict)
-    assert.ok(version.width * version.height <= strict.maxPixels)
+    assert.ok(version.width * version.height <= 160_000)
     assert.ok(Math.max(version.width, version.height) <= MAX_SIDE)
   })
 

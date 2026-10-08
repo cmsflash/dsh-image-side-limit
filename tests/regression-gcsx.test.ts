@@ -18,8 +18,9 @@ import { after, before, describe, it } from 'node:test'
 import sharp from 'sharp'
 import { Context } from '@deepseek-ai/cordis'
 import { LocalAttachmentStore } from '@deepseek-ai/dsh-attachment-local'
-import type { ImageRequestPolicy } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SideLimitedAttachmentStore } from '../src/index.ts'
+import { routeTarget } from './route-target.ts'
 
 /** The banner's source dimensions before DSH normalized it to a 2048 long edge. */
 const ORIGINAL = { width: 3248, height: 750 }
@@ -32,7 +33,8 @@ const STORED = { width: 2048, height: 473 }
 /** Anthropic's per-side cap for requests carrying more than twenty images. */
 const ANTHROPIC_MANY_IMAGE_MAX_SIDE = 2000
 
-const ROUTE_POLICY: ImageRequestPolicy = { maxPixels: 2048 * 2048, maxBytes: 1024 * 1024 }
+/** The default route's target for one stored image. */
+const target = (ref: ImageAttachmentRef) => routeTarget(ref.width, ref.height)
 
 let home: string
 
@@ -67,7 +69,7 @@ describe('GCSX regression: 2048x473 banner', () => {
     })
     assert.equal(ref.width, STORED.width)
 
-    const version = await store.readImageRequest(ref, ROUTE_POLICY)
+    const version = await store.readImageRequest(ref, target(ref))
     const decoded = await sharp(version.data).metadata()
     assert.ok(
       Math.max(decoded.width, decoded.height) > ANTHROPIC_MANY_IMAGE_MAX_SIDE,
@@ -93,7 +95,7 @@ describe('GCSX regression: 2048x473 banner', () => {
       `precondition: expected storage to keep an oversized long edge, got ${ref.width}x${ref.height}`,
     )
 
-    const version = await store.readImageRequest(ref, ROUTE_POLICY)
+    const version = await store.readImageRequest(ref, target(ref))
     const decoded = await sharp(version.data).metadata()
     assert.ok(
       Math.max(decoded.width, decoded.height) <= ANTHROPIC_MANY_IMAGE_MAX_SIDE,
@@ -110,7 +112,7 @@ describe('GCSX regression: 2048x473 banner', () => {
       mediaType: 'image/png',
       name: 'image.png',
     })
-    const version = await store.readImageRequest(ref, ROUTE_POLICY)
+    const version = await store.readImageRequest(ref, target(ref))
     assert.ok(version.width >= 1990, `expected a long edge just under the cap, got ${version.width}`)
     assert.ok(version.width <= ANTHROPIC_MANY_IMAGE_MAX_SIDE)
   })
@@ -131,7 +133,7 @@ describe('GCSX regression: 2048x473 banner', () => {
     })
 
     const versions = await Promise.all(
-      [...screenshots, oversized].map(ref => store.readImageRequest(ref, ROUTE_POLICY)),
+      [...screenshots, oversized].map(ref => store.readImageRequest(ref, target(ref))),
     )
     assert.equal(versions.length, 21)
     for (const version of versions) {
